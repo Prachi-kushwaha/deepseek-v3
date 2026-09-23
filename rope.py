@@ -20,8 +20,3 @@ def Rope(pos, x):
 
 
 
-
-
-
-
-
