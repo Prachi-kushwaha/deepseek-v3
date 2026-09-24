@@ -62,9 +62,14 @@ class MLAattention(nn.Module):
         for p in self.parameters():
             nn.init.xavier_uniform_(p)
 
-    def forward(self, x, cache=None):
+    def forward(self, x, position_ids=None, cache=None):
 
         batch, seq_len, _ = x.shape
+
+        past_len = 0 if cache is None else cache["compressed_kv_cache"].shape[1]
+
+        if position_ids is None:
+            position_ids = torch.arange(past_len, past_len + seq_len, device=x.device).unsqueeze(0).expand(batch, seq_len)
 
         # Step 1: Compress K and V into a shared latent
         # [B, S, hidden_dim] -> [B, S, compressed_dim]
@@ -80,16 +85,10 @@ class MLAattention(nn.Module):
         # [B, S, rope_dim] -> [B, 1, S, rope_dim]
         k_rope_input = k_rope_input.unsqueeze(1)
 
-        # Step 3: Determine the position offset from the cache
-        # If a cache exists, its sequence length tells us
-        # how many tokens have already been processed.
-        past_len = 0 if cache is None else cache["compressed_kv_cache"].shape[1]
-
-        position = torch.arange(past_len, past_len + seq_len, device=x.device).unsqueeze(0).expand(batch, seq_len)
 
         # Apply RoPE to the key's rotary component.
         # Result: [B, 1, S, rope_dim]
-        k_rope = Rope(position, k_rope_input)
+        k_rope = Rope(position_ids, k_rope_input)
 
         if cache is None:
             # First forward pass: initialize the cache.
@@ -99,7 +98,6 @@ class MLAattention(nn.Module):
             # Append the new rotary key along the sequence axis.
             # The head dimension remains 1 because this key
             # representation is shared across heads.
-            past_len = cache["compressed_kv_cache"].shape[1]
             compressed_kv_cache = torch.cat(
                 [cache["compressed_kv_cache"], compressed_kv], dim=1
             )
@@ -128,11 +126,8 @@ class MLAattention(nn.Module):
         q_rope_input = query_compressed @ self.rope_query_weight.T
         q_rope_input = q_rope_input.unsqueeze(1)
 
-        # Generate positions for the current query tokens.
-        position = torch.arange(past_len, past_len+seq_len, device=x.device).unsqueeze(0).expand(batch, seq_len)
-
         # Apply RoPE to the query's rotary component.
-        q_rope = Rope(position,  q_rope_input)
+        q_rope = Rope(position_ids,  q_rope_input)
 
         # Reshape the rotary query into per-head components.
         q_rope_head = q_rope.view(batch, seq_len, self.num_head, self.rope_dim).transpose(1,2)
@@ -163,15 +158,12 @@ class MLAattention(nn.Module):
 
         scores = scores / math.sqrt(self.head_dim + self.rope_dim)
 
-        # Query positions correspond to the new input tokens.
-        q_position = torch.arange(past_len, past_len + seq_len, device=x.device)
-
         # Key positions cover all tokens in the cache.
-        k_position = torch.arange(total_len, device=x.device)
+        k_position_ids = torch.arange(total_len, device=x.device)
 
         # Step 10: casual mask only when casual mask = True
         causal_mask = (
-            k_position[None, :] <= q_position[:, None]
+            k_position_ids[None, :] <= position_ids[:, None]
         )
 
         # Mask future-token scores with negative infinity,
