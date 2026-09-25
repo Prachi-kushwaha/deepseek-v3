@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-class ffn(nn.Module):
+class FFn(nn.Module):
     def __init__(self, hidden_dim):
         super().__init__()
         self.ffn_net = nn.Sequential(
@@ -37,12 +37,12 @@ class MOE_layer(nn.Module):
 
         #  shared ffn layer
         self.shared_ffn = nn.ModuleList([
-            ffn(hidden_dim) for i in range(ns)
+            FFn(hidden_dim) for i in range(ns)
         ])
 
         #  router ffn layer
         self.routed_ffn = nn.ModuleList([
-            ffn(hidden_dim) for i in range(nr)
+            FFn(hidden_dim) for i in range(nr)
         ])
 
 
@@ -63,7 +63,7 @@ class MOE_layer(nn.Module):
 
         routed_output = torch.zeros_like(input)
 
-        #  traverse all the experts in routed_ffn and if topt_index match with expert_id we perform our operation 
+        #  traverse all the experts in routed_ffn and if topt_index match with expert_id we perform our operation
         for expert_id, expert in range(self.routed_ffn):
             token_idx, topk_slot =torch.where(
                 topk_indices == expert_id

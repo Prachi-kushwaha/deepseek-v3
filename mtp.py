@@ -35,6 +35,8 @@ class MTP(nn.Module):
 
         for k, mtp_module in enumerate(self.mtp_module, start=1):
 
+            all_logits = []
+
             future_ids = input_ids[:, k:]
             future_embedding = self.embedding[future_ids]
             hidden_input = hidden_state[:, :-k]
@@ -42,8 +44,9 @@ class MTP(nn.Module):
             hidden = mtp_module(hidden_input, future_embedding, position_ids[:, :])
 
             logits = self.output_head(hidden)
+            all_logits.append(logits)
 
-            return logits
+            return all_logits
 
 
 
