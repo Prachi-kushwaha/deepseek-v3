@@ -1,87 +1,120 @@
 import torch
 import torch.nn as nn
 
-class FFn(nn.Module):
-    def __init__(self, hidden_dim):
-        super().__init__()
-        self.ffn_net = nn.Sequential(
-            nn.Linear(hidden_dim, 4*hidden_dim),
-            nn.GELU(),
-            nn.Linear(4*hidden_dim, hidden_dim)
-        )
-    def forward(self, input):
-        return self.ffn_net(input)
+class ffn(nn.Module):
+  def __init__(self, intermediate_dim, hidden_dim):
+    super().__init__()
+    self.gate_proj = nn.Linear(hidden_dim, intermediate_dim, bias = False)
+    self.up_proj = nn.Linear(hidden_dim, intermediate_dim, bias = False)
+    self.down_proj = nn.Linear(intermediate_dim, hidden_dim, bias = False)
+  def forward(self, x):
+    return self.down_proj(
+        F.silu(self.gate_proj(x)) * self.up_proj(x)
+    )
 
+class Moe(nn.Module):
+  def __init__(self, intermediate_dim, hidden_dim, num_shared_expert, num_routed_expert, top_k, alpha):
+    super().__init__()
 
+    # number of routed_expert
+    self.n_r = num_routed_expert
 
-class MOE_layer(nn.Module):
-    def __init__(self, nr, ns, kr, hidden_dim ):
-        super().__init__()
+    # number of shared_expert
+    self.n_s = num_shared_expert
 
-        # number of topk experts
-        self.kr = kr
+     # Number of routed experts selected per token
+    self.k_r = top_k
 
-        # number of routed experts
-        self.nr = nr
+    # centroid vector: produces one affinity score for each routed expert
+    self.centroid_vector = nn.Linear(hidden_dim, self.n_r)
 
-        # number of shared experts
-        self.ns = ns
+    self.register_buffer("bias",torch.zeros(self.n_r))
 
-        # learnable centroid vector
-        self.centrod_vector = nn.Parameter(torch.empty(hidden_dim, kr))
-        nn.init.xavier_uniform(self.centrod_vector)
+    # routed expert
+    self.routed_expert = nn.Modulelist(
+        ffn(intermediate_dim, hidden_dim) for _ in range(num_routed_expert)
+    )
 
-        # extra bias term to balance biasness of auxialiary load balance
-        self.bias = nn.Parameter(torch.empty(self.kr, hidden_dim))
-        nn.init.xavier_uniform(self.bias)
+    # shared expert
+    self.shared_expert = nn.Modulelist(
+        ffn(intermediate_dim, hidden_dim) for _ in range(num_shared_expert)
+    )
 
-        #  shared ffn layer
-        self.shared_ffn = nn.ModuleList([
-            FFn(hidden_dim) for i in range(ns)
-        ])
+    self.alpha = alpha
 
-        #  router ffn layer
-        self.routed_ffn = nn.ModuleList([
-            FFn(hidden_dim) for i in range(nr)
-        ])
+  def forward(self, x):
+    b,s,d = x.shape
 
+   # Compute token-to-expert affinity scores
+    score = F.sigmoid(self.centroid_vector(x))
 
-    def forward(self, input):
-        # applying sigmoid to find out scores for our token (sigmoid gives us value between 0 and 1)
-        scores = torch.sigmoid(input.T, self.centrod_vector)
+    # Select the top-k routed experts for each token
+    _, topk_indices = torch.topk(score + self.bias, k = self.k_r, dim=-1)
 
-        #  torch.topk gives top k values from scores
-        topk_experts_score, topk_indices = torch.topk(scores, self.kr, dim=-1)
+    # Get ORIGINAL scores of selected experts
+    topk_experts_score = score.gather(dim=-1, index=topk_indices)
 
-        #  gated weights therefore after expert output we can apply how much of expert output we want to use
-        gated_weights = topk_experts_score/topk_experts_score.sum(dim=-1, keepdim=True) + self.bias
+    # Normalize the selected expert scores to obtain gating weights
+    gating_weights = topk_experts_score/topk_experts_score.sum(dim=-1, keepdim=True)
 
-        #  shared output sum bcs here in deeepseek moe we have two kind of expert shared means all token pass through this and routed from which we select topk and attend them
-        shared_output = sum(
-            expert(input) for expert in self.shared_ffn
-        )
+    # output from shared expert path
+    shared_output = sum(expert(x) for expert in self.shared_expert)
 
-        routed_output = torch.zeros_like(input)
+    # Residual connection + shared expert output
+    output = x +  shared_output
 
-        #  traverse all the experts in routed_ffn and if topt_index match with expert_id we perform our operation
-        for expert_id, expert in range(self.routed_ffn):
-            token_idx, topk_slot =torch.where(
-                topk_indices == expert_id
+    #  calculation of routed expert
+    for expert_idx, expert in enumerate(self.routed_expert):
+
+      #  find: batch_index, token_idx and topk position for tokens routed
+      # to this expert
+      batch_idx, token_idx, topk_slot = torch.where(
+          topk_indices == expert_idx
+      )
+
+      # gather tokens assigned to current expert
+      expert_input = x[batch_idx, token_idx]
+
+      # apply routed_expert for currect expert
+      expert_output = expert(expert_input)
+
+      # select the corresponding normalized scores
+      selected_weights = gating_weights[batch_idx, token_idx, topk_slot]
+
+      # Weight each expert output by its routing probability
+      expert_output = expert_output * selected_weights.unsqueeze(-1)
+
+      # Add the weighted expert output back to its original tokens
+      output[batch_idx, token_idx] += expert_output
+
+      # complementary sequence-wise auxiliary loss
+
+      # Normalize affinity scores across all routed experts for each token
+      normalized_scores = score/score.sum(dim=-1, keepdim=True)
+
+      # Compute the average normalized affinity score for each expert
+      p_i = normalized_scores.mean(dim=1)
+
+      # Initialize the selection count for each routed expert
+      f = torch.zeros(b,self.n_r, device=x.device, dtype=x.dtype)
+
+      # Count how many times each expert is selected in Top-K routing
+      for batch_idx in range(b):
+
+        f[batch_idx].scatter_add_(
+            0,
+            topk_indices[batch_idx].reshape(-1),
+            torch.ones(
+                topk_indices[batch_idx].numel(),
+                device=x.device,
+                dtype=x.dtype
             )
+        )
 
+      # Normalize expert selection counts to obtain f_i
+      f = f * self.n_r/(self.k_r * s)
 
-            expert_input = input[token_idx]
-            expert_output = expert(expert_input)
+      # complementary sequence-wise auxiliary loss
+      loss_balance = self.alpha * torch.sum(f * p_i, dim=-1)
 
-            weights = gated_weights[topk_indices, topk_slot].unsqueeze(-1)
-
-            routed_output.index_add(
-                0,
-                token_idx,
-                expert_output*weights
-            )
-
-            output = shared_output + routed_output
-
-        return output
-
+    return output, loss_balance
