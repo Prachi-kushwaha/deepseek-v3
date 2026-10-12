@@ -8,29 +8,19 @@ from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
 from tokenizers.trainers import WordLevelTrainer
 
+
 dataset_name = "roneneldan/TinyStories"
+
 
 def load_data(dataset_name):
     dataset = load_data("dataset_name", split="train")
-    dataset = dataset.select(range(50000))
+    dataset = dataset.select(range(2000))
     dataset_split = dataset.train_test_split(test_size = 0.1,seed=42)
     train_dataset = dataset_split["train"]
     val_dataset = dataset_split["test"]
     return train_dataset, val_dataset
 
 train_dataset, val_dataset = load_data(dataset_name)
-# dataset = load_dataset(
-#     "roneneldan/TinyStories",
-#     split="train"
-# )
-# dataset = dataset.select(range(50000))
-
-# dataset_split = dataset.train_test_split(
-#     test_size = 0.1,
-#     seed=42
-# )
-# train_dataset = dataset_split["train"]
-# test_dataset = dataset_split["test"]
 
 
 def get_data(data_set):
@@ -61,6 +51,7 @@ def tokenize():
   )
 
   return tokenizer
+
 
 tokenizer = tokenize()
 
@@ -93,12 +84,12 @@ val_tokenized_dataset = val_tokenized_dataset.filter(
     lambda data: 100 <= len(data["input_ids"]) <= 500
 )
 
-max_seq_len = 500
 
-def collate_fn(batch):
+
+def collate_fn(config):
   input_batch = []
-
-  for data in batch:
+  max_seq_len = config.max_len
+  for data in config.batch:
     ids = data["input_ids"]
 
     # truncate
@@ -130,6 +121,7 @@ def collate_fn(batch):
 
   return input, labels
 
+
 batch_size = 8
 
 train_loader = DataLoader(
@@ -146,4 +138,5 @@ val_loader = DataLoader(
     shuffle=True,
     collate_fn = collate_fn
 )
+
 

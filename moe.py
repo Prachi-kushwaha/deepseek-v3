@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class ffn(nn.Module):
   def __init__(self, intermediate_dim, hidden_dim):
@@ -13,7 +14,7 @@ class ffn(nn.Module):
     )
 
 class Moe(nn.Module):
-  def __init__(self, intermediate_dim, hidden_dim, num_shared_expert, num_routed_expert, top_k, alpha):
+  def __init__(self, hidden_dim,intermediate_dim, num_routed_expert,num_shared_expert, top_k, alpha):
     super().__init__()
 
     # number of routed_expert
@@ -31,21 +32,21 @@ class Moe(nn.Module):
     self.register_buffer("bias",torch.zeros(self.n_r))
 
     # routed expert
-    self.routed_expert = nn.Modulelist(
+    self.routed_expert = nn.ModuleList(
         ffn(intermediate_dim, hidden_dim) for _ in range(num_routed_expert)
     )
 
     # shared expert
-    self.shared_expert = nn.Modulelist(
+    self.shared_expert = nn.ModuleList(
         ffn(intermediate_dim, hidden_dim) for _ in range(num_shared_expert)
     )
 
     self.alpha = alpha
 
   def forward(self, x):
-    b,s,d = x.shape
+    b,s,_ = x.shape
 
-   # Compute token-to-expert affinity scores
+    # Compute token-to-expert affinity scores
     score = F.sigmoid(self.centroid_vector(x))
 
     # Select the top-k routed experts for each token
@@ -95,26 +96,26 @@ class Moe(nn.Module):
       # Compute the average normalized affinity score for each expert
       p_i = normalized_scores.mean(dim=1)
 
-      # Initialize the selection count for each routed expert
-      f = torch.zeros(b,self.n_r, device=x.device, dtype=x.dtype)
+      # Count top-K selections separately for each sequence
+      f = torch.zeros(
+          b, self.n_r,
+          device=x.device,
+          dtype=score.dtype
+      )
 
-      # Count how many times each expert is selected in Top-K routing
-      for batch_idx in range(b):
-
-        f[batch_idx].scatter_add_(
-            0,
-            topk_indices[batch_idx].reshape(-1),
-            torch.ones(
-                topk_indices[batch_idx].numel(),
-                device=x.device,
-                dtype=x.dtype
-            )
-        )
+      f.scatter_add_(
+          dim=1,
+          index=topk_indices.reshape(b, -1),
+          src=torch.ones_like(
+              topk_indices.reshape(b, -1),
+              dtype=score.dtype
+          )
+      )
 
       # Normalize expert selection counts to obtain f_i
       f = f * self.n_r/(self.k_r * s)
 
       # complementary sequence-wise auxiliary loss
-      loss_balance = self.alpha * torch.sum(f * p_i, dim=-1)
+      loss_balance = self.alpha * torch.sum(f * p_i, dim=-1).mean()
 
     return output, loss_balance

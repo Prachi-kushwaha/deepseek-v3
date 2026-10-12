@@ -195,3 +195,104 @@ class MLAattention(nn.Module):
         return output, new_cache
 
 
+class MLAattention2(nn.Module):
+    def __init__(self, compressed_dim, rope_dim, hidden_dim, q_compressed_dim, num_head, max_seq_len):
+        super().__init__()
+
+        self.num_head = num_head
+        self.rope_dim = rope_dim
+
+        assert hidden_dim % num_head == 0, "hidden_dim should be divisible by num_head"
+        self.head_dim = hidden_dim // num_head
+
+        self.compressed_weight = nn.Parameter(torch.empty(compressed_dim, hidden_dim))
+        self.down_proj_key = nn.Parameter(torch.empty(self.head_dim * num_head, compressed_dim))
+        self.down_proj_value = nn.Parameter(torch.empty(self.head_dim * num_head, compressed_dim))
+        self.rope_proj = nn.Parameter(torch.empty(rope_dim, hidden_dim))
+        self.query_compressed_weight = nn.Parameter(torch.empty(q_compressed_dim, hidden_dim))
+        self.query_down_proj  = nn.Parameter(torch.empty(self.head_dim*num_head, q_compressed_dim))
+        self.query_rope_proj = nn.Parameter(torch.empty(rope_dim*num_head, q_compressed_dim))
+        self.output_proj = nn.Parameter(torch.empty(hidden_dim, self.head_dim*num_head))
+        mask = torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal = 1)
+        self.register_buffer("mask", mask, persistent=False)
+        for p in self.parameters():
+            nn.init.xavier_uniform_(p)
+
+        self.Rope = Rope(max_seq_len, rope_dim)
+
+
+    def forward(self, x):
+            batch, seq_len, hidden_dim = x.shape
+
+            # key, value
+            compressed_kv =   x @ (self.compressed_weight).transpose(-2,-1)
+            compressed_kv.unsqueeze(-2)
+
+            key_total = compressed_kv @ (self.down_proj_key).transpose(-2,-1)
+            key_head = key_total.view( batch, seq_len, self.num_head, self.head_dim)
+
+            rope_input = x @ (self.rope_proj).transpose(-2,-1)
+
+            rope_key = self.Rope(rope_input)
+
+            rope_key = rope_key.unsqueeze(2).expand(-1, -1, self.num_head, -1)
+
+            key_total = torch.cat([key_head, rope_key], dim=-1)
+
+            v_total = compressed_kv @ (self.down_proj_value).transpose(-2,-1)
+
+            v_head = v_total.view(batch, seq_len, self.num_head, self.head_dim)
+
+            # Query
+
+            compressed_query = x @ (self.query_compressed_weight).transpose(-2,-1)
+
+            q_total = compressed_query @ (self.query_down_proj).transpose(-2,-1)
+            q_head = q_total.view(batch, seq_len, self.num_head, self.head_dim)
+
+            query_rope_input = compressed_query @ (self.query_rope_proj).transpose(-2,-1)
+            query_rope_input = query_rope_input.view(
+                 batch, seq_len, self.num_head, self.rope_dim
+            )
+
+            rope_query = torch.stack(
+                [
+                    self.Rope(query_rope_input[:, :, h, :])
+                    for h in range(self.num_head)
+                ],
+                dim=2
+            )
+
+            query_total = torch.cat([q_head, rope_query], dim=-1)
+
+            Q = query_total.transpose(1,2)
+            K = key_total.transpose(1,2)
+            V = v_head.transpose(1,2)
+
+
+            score = Q @ K.transpose(-2,-1)
+            scaled_score = score / (self.hidden_dim + self.rope_dim)**0.5
+
+            mask_score = scaled_score.masked_fill(self.mask[None, None, :seq_len, :seq_len],float("-inf") )
+
+            soft_score = torch.softmax(mask_score, dim=-1)
+
+
+            final_score = soft_score @ V
+            output = final_score.transpose(1, 2).contiguous()
+            output = output.reshape(batch, seq_len, self.hidden_dim)
+
+            output = output @ (self.output_proj).transpose(-2,-1)
+
+            return output
+
+
+
+
+
+
+
+
+
+
+
