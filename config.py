@@ -5,7 +5,7 @@ from dataclasses import dataclass
 class DataConfig:
     dataset_name: str = "roneneldan/TinyStories"
     dataset_split: str = "train"
-    num_samples: int = 2000
+    num_samples: int = 100000
     validation_ratio: float = 0.1
     split_seed: int = 42
 
@@ -13,7 +13,7 @@ class DataConfig:
     min_frequency: int = 1
 
     min_seq_len: int = 100
-    max_seq_len: int = 300
+    max_seq_len: int = 500
     batch_size: int = 8
 
 
@@ -40,7 +40,7 @@ class ModelConfig:
 @dataclass
 class TrainingConfig:
     batch_size: int = 8
-    num_epochs: int = 2
+    num_epochs: int = 4
     lr_rate: float = 0.01
     weight_decay: float = 0.01
     step_size: int = 1

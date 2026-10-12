@@ -18,13 +18,13 @@ class Moe(nn.Module):
     super().__init__()
 
     # number of routed_expert
-    self.n_r = model_config.num_routed_expert
+    self.n_r = model_config.nr
 
     # number of shared_expert
-    self.n_s = model_config.num_shared_expert
+    self.n_s = model_config.ns
 
      # Number of routed experts selected per token
-    self.k_r = model_config.top_k
+    self.k_r = model_config.kr
 
     # centroid vector: produces one affinity score for each routed expert
     self.centroid_vector = nn.Linear(model_config.hidden_dim, self.n_r)
@@ -33,12 +33,12 @@ class Moe(nn.Module):
 
     # routed expert
     self.routed_expert = nn.ModuleList(
-        ffn(model_config.intermediate_dim, model_config.hidden_dim) for _ in range(model_config.num_routed_expert)
+        ffn(model_config) for _ in range(model_config.nr)
     )
 
     # shared expert
     self.shared_expert = nn.ModuleList(
-        ffn(model_config) for _ in range(model_config.num_shared_expert)
+        ffn(model_config) for _ in range(model_config.ns)
     )
 
     self.alpha = model_config.alpha

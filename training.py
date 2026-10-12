@@ -121,11 +121,28 @@ def train(model, config):
     os.makedirs("checkpoints", exist_ok=True)
 
     start_epochs = 0
-    checkpoint_path = "checkpoints/checkpoint_epoch_2.pt"
-    if os.path.exists(checkpoint_path):
+    checkpoint_path = None
+    checkpoint_epochs = []
+
+    for filename in os.listdir("checkpoints"):
+        if filename.startswith("checkpoint_epoch_") and filename.endswith(".pt"):
+            try:
+                epoch_number = int(
+                    filename[len("checkpoint_epoch_"):-len(".pt")]
+                )
+                checkpoint_epochs.append((epoch_number, filename))
+            except ValueError:
+                continue
+
+    if checkpoint_epochs:
+        latest_epoch, latest_filename = max(checkpoint_epochs)
+        checkpoint_path = os.path.join("checkpoints", latest_filename)
         start_epochs = load_checkpoint(
             model, optimizer, checkpoint_path, device
         )
+        print(f"Loaded latest checkpoint: {checkpoint_path}")
+    else:
+        print("No checkpoint found. Starting training from epoch 1.")
     for epoch in range(start_epochs, num_epochs):
 
 

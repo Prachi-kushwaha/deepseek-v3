@@ -222,7 +222,7 @@ class MLAattention2(nn.Module):
 
         self.output_proj = nn.Parameter(torch.empty(self.hidden_dim, self.head_dim*self.num_head))
 
-        mask = torch.triu(torch.ones(model_config.max_len, model_config.max_len), diagonal = 1)
+        mask = torch.triu(torch.ones(model_config.max_len, model_config.max_len, dtype=torch.bool), diagonal=1)
         self.register_buffer("mask", mask, persistent=False)
 
         for p in self.parameters():
