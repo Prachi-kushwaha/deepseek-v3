@@ -4,9 +4,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mtp import MTP
 from model import Deepseekv3_model
-from config import ModelConfig , TrainingConfig
+from config import ModelConfig , TrainingConfig, DataConfig
 from checkpoint import save_checkpoint, load_checkpoint
-from data_pipeline import train_loader, val_loader, tokenizer
+from data_pipeline import create_dataloaders
 
 
 def compute_mtp_loss(mtp_logits, input_ids, lambda_mtp):
@@ -34,9 +34,17 @@ def compute_mtp_loss(mtp_logits, input_ids, lambda_mtp):
     return lambda_mtp * torch.stack(mtp_losses).mean()
 
 
+data_config = DataConfig()
+train_loader, val_loader, tokenizer = create_dataloaders(
+    data_config
+)
 
-config = ModelConfig()
-model = Deepseekv3_model(config)
+
+model_config = ModelConfig(
+    vocab_size = tokenizer.get_vocab_size(),
+    max_len=data_config.max_seq_len,
+)
+model = Deepseekv3_model(model_config)
 
 
 config = TrainingConfig()
@@ -85,7 +93,7 @@ def generate_text(model,tokenizer, prompt, device, max_new_tokens=30):
                 dim=1,
             )
 
-            eos_id = tokenizer.token_to_id("</s>")
+            eos_id = tokenizer.token_to_id("[EOS]")
 
             if eos_id is not None and next_token.item() == eos_id:
                 break

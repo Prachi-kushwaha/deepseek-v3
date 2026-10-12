@@ -2,22 +2,39 @@ from dataclasses import dataclass
 
 
 @dataclass
-class ModelConfig:
-    hidden_dim=256,
-    compressed_dim=64,
-    rope_dim=32,
-    max_len=500,
-    vocab_size=12928,
-    num_head=4,
-    nr=4,
-    ns=1,
-    kr=2,
-    num_layer=2,
-    mtp_num_layer=2,
-    q_compressed_dim=64,
-    intermediate_dim=512,
-    alpha=0.001,
+class DataConfig:
+    dataset_name: str = "roneneldan/TinyStories"
+    dataset_split: str = "train"
+    num_samples: int = 2000
+    validation_ratio: float = 0.1
+    split_seed: int = 42
 
+    vocab_size: int = 12928
+    min_frequency: int = 1
+
+    min_seq_len: int = 100
+    max_seq_len: int = 300
+    batch_size: int = 8
+
+
+@dataclass
+class ModelConfig:
+    hidden_dim: int = 256
+    compressed_dim: int = 64
+    rope_dim: int = 32
+    max_len: int = 300
+    vocab_size: int = 12928
+
+    num_head: int = 4
+    nr: int = 4
+    ns: int = 1
+    kr: int = 2
+    num_layer: int = 2
+    mtp_num_layer: int = 2
+
+    q_compressed_dim: int = 64
+    intermediate_dim: int = 512
+    alpha: float = 0.001
 
 
 @dataclass

@@ -1,26 +1,24 @@
 import torch
 import torch.nn as nn
 
-from rope import Rope
 from mla_attention import MLAattention2
 from moe import Moe
-from mtp import MTP, MTP_block
-
+from mtp import MTP
 class Embedding_layer(nn.Module):
-    def __init__(self, hidden_dim, vocab_size = 30000):
+    def __init__(self, model_config):
         super().__init__()
-        self.embedding = nn.Embedding(vocab_size, hidden_dim)
+        self.embedding = nn.Embedding(model_config.vocab_size, model_config.hidden_dim)
 
     def forward(self, x):
         return self.embedding(x)
 
 class Transformer_block(nn.Module):
-    def __init__(self, hidden_dim, compressed_dim, rope_dim, max_len,num_head, nr,  ns, kr, q_compressed_dim, intermediate_dim, alpha):
+    def __init__(self, model_config):
         super().__init__()
-        self.attention_norm = nn.RMSNorm(hidden_dim)
-        self.attention = MLAattention2(compressed_dim, rope_dim, hidden_dim, q_compressed_dim, num_head, max_len)
-        self.moe_norm = nn.RMSNorm(hidden_dim)
-        self.moe = Moe(hidden_dim, intermediate_dim, nr, ns, kr,alpha)
+        self.attention_norm = nn.RMSNorm(model_config.hidden_dim)
+        self.attention = MLAattention2(model_config)
+        self.moe_norm = nn.RMSNorm(model_config.hidden_dim)
+        self.moe = Moe(model_config)
 
     def forward(self, x):
         residual = x
@@ -35,15 +33,15 @@ class Transformer_block(nn.Module):
         return x, loss_balance
 
 class Deepseekv3_model(nn.Module):
-    def __init__(self, hidden_dim, compressed_dim, rope_dim, max_len, vocab_size,num_head, nr, ns, kr, num_layer, mtp_num_layer, q_compressed_dim,intermediate_dim, alpha):
+    def __init__(self, model_config):
         super().__init__()
-        self.embedding = Embedding_layer(hidden_dim, vocab_size)
-        self.lm_head = nn.Linear(hidden_dim, vocab_size, bias=False)
-        self.layers = nn.ModuleList([Transformer_block( hidden_dim, compressed_dim, rope_dim, max_len,num_head, nr, ns, kr, q_compressed_dim, intermediate_dim, alpha) for _ in range(num_layer)])
+        self.embedding = Embedding_layer(model_config)
+        self.lm_head = nn.Linear(model_config.hidden_dim, model_config.vocab_size, bias=False)
+        self.layers = nn.ModuleList([Transformer_block( model_config) for _ in range(model_config.num_layer)])
 
-        self.mtp_layer =  MTP(hidden_dim, compressed_dim, rope_dim, max_len,num_head, nr, ns, kr, q_compressed_dim, intermediate_dim, alpha, self.lm_head, mtp_num_layer, self.embedding)
+        self.mtp_layer =  MTP(model_config, self.lm_head, self.embedding)
 
-        self.final_norm = nn.RMSNorm(hidden_dim)
+        self.final_norm = nn.RMSNorm(model_config.hidden_dim)
 
     def forward(self, input_ids):
 
@@ -51,7 +49,7 @@ class Deepseekv3_model(nn.Module):
 
         model_output = self.embedding(x)
 
-        total_aux_loss = 0.0
+        total_aux_loss = model_output.new_zeros(())
 
         for layer in self.layers:
             model_output, loss_balance = layer(model_output)

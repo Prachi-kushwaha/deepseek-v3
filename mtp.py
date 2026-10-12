@@ -1,16 +1,15 @@
 import torch
 import torch.nn as nn
 
-from model import Transformer_block
-from model import Embedding_layer
-
 class MTP_block(nn.Module):
-    def __init__(self, hidden_dim, compressed_dim, rope_dim, max_len,num_head, nr, ns, kr, q_compressed_dim, intermediate_dim, alpha):
+    def __init__(self, model_config):
         super().__init__()
-        self.mtp_projection = nn.Linear(2*hidden_dim, hidden_dim)
-        self.rms_hidden = nn.RMSNorm(hidden_dim)
-        self.rms_embed = nn.RMSNorm(hidden_dim)
-        self.trm_layer = Transformer_block(hidden_dim, compressed_dim, rope_dim, max_len,num_head, nr, ns, kr, q_compressed_dim, intermediate_dim, alpha)
+        from model import Transformer_block
+
+        self.mtp_projection = nn.Linear(2*model_config.hidden_dim, model_config.hidden_dim)
+        self.rms_hidden = nn.RMSNorm(model_config.hidden_dim)
+        self.rms_embed = nn.RMSNorm(model_config.hidden_dim)
+        self.trm_layer = Transformer_block(model_config)
         # self.output_head= nn.Linear(hidden_dim, vocab_size, bias=False)
 
     def forward(self, prev_hidden, future_embedding):
@@ -23,16 +22,20 @@ class MTP_block(nn.Module):
 
 
 class MTP(nn.Module):
-    def __init__(self, hidden_dim, compressed_dim, rope_dim, max_len,num_head, nr, ns, kr,q_compressed_dim, intermediate_dim, alpha,output_head, mtp_num_layer, embedding):
+    def __init__(self, model_config, output_head, embedding):
         super().__init__()
+        if model_config.mtp_num_layer < 1:
+            raise ValueError("mtp_num_layer must be at least 1")
 
         self.embedding = embedding
         self.output_head = output_head
-        self.mtp_module = nn.ModuleList([MTP_block(hidden_dim, compressed_dim, rope_dim, max_len,num_head, nr, ns, kr, q_compressed_dim, intermediate_dim, alpha) for _ in range(mtp_num_layer)])
+        self.mtp_module = nn.ModuleList([MTP_block(model_config) for _ in range(model_config.mtp_num_layer)])
 
     def forward(self, hidden_state, input_ids):
 
         all_logits = []
+        total_aux_loss = hidden_state.new_zeros(())
+
 
         hidden = hidden_state
 
@@ -46,8 +49,9 @@ class MTP(nn.Module):
 
             logits = self.output_head(hidden)
             all_logits.append(logits)
+            total_aux_loss = total_aux_loss + loss_balance
 
-        return all_logits, loss_balance
+        return all_logits, total_aux_loss
 
 
 

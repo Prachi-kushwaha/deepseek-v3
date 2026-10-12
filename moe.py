@@ -3,45 +3,45 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class ffn(nn.Module):
-  def __init__(self, intermediate_dim, hidden_dim):
+  def __init__(self, model_config):
     super().__init__()
-    self.gate_proj = nn.Linear(hidden_dim, intermediate_dim, bias = False)
-    self.up_proj = nn.Linear(hidden_dim, intermediate_dim, bias = False)
-    self.down_proj = nn.Linear(intermediate_dim, hidden_dim, bias = False)
+    self.gate_proj = nn.Linear(model_config.hidden_dim, model_config.intermediate_dim, bias = False)
+    self.up_proj = nn.Linear(model_config.hidden_dim, model_config.intermediate_dim, bias = False)
+    self.down_proj = nn.Linear(model_config.intermediate_dim, model_config.hidden_dim, bias = False)
   def forward(self, x):
     return self.down_proj(
         F.silu(self.gate_proj(x)) * self.up_proj(x)
     )
 
 class Moe(nn.Module):
-  def __init__(self, hidden_dim,intermediate_dim, num_routed_expert,num_shared_expert, top_k, alpha):
+  def __init__(self, model_config):
     super().__init__()
 
     # number of routed_expert
-    self.n_r = num_routed_expert
+    self.n_r = model_config.num_routed_expert
 
     # number of shared_expert
-    self.n_s = num_shared_expert
+    self.n_s = model_config.num_shared_expert
 
      # Number of routed experts selected per token
-    self.k_r = top_k
+    self.k_r = model_config.top_k
 
     # centroid vector: produces one affinity score for each routed expert
-    self.centroid_vector = nn.Linear(hidden_dim, self.n_r)
+    self.centroid_vector = nn.Linear(model_config.hidden_dim, self.n_r)
 
     self.register_buffer("bias",torch.zeros(self.n_r))
 
     # routed expert
     self.routed_expert = nn.ModuleList(
-        ffn(intermediate_dim, hidden_dim) for _ in range(num_routed_expert)
+        ffn(model_config.intermediate_dim, model_config.hidden_dim) for _ in range(model_config.num_routed_expert)
     )
 
     # shared expert
     self.shared_expert = nn.ModuleList(
-        ffn(intermediate_dim, hidden_dim) for _ in range(num_shared_expert)
+        ffn(model_config) for _ in range(model_config.num_shared_expert)
     )
 
-    self.alpha = alpha
+    self.alpha = model_config.alpha
 
   def forward(self, x):
     b,s,_ = x.shape
@@ -62,7 +62,7 @@ class Moe(nn.Module):
     shared_output = sum(expert(x) for expert in self.shared_expert)
 
     # Residual connection + shared expert output
-    output = x +  shared_output
+    output = shared_output
 
     #  calculation of routed expert
     for expert_idx, expert in enumerate(self.routed_expert):

@@ -5,220 +5,230 @@ import math
 
 from rope import Rope
 
-class MLAattention(nn.Module):
-    def __init__(self, hidden_dim, compressed_dim, rope_dim, num_head):
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        self.num_head = num_head
+# class MLAattention(nn.Module):
+#     def __init__(self, hidden_dim, compressed_dim, rope_dim, num_head):
+#         super().__init__()
+#         self.hidden_dim = hidden_dim
+#         self.num_head = num_head
 
-        assert hidden_dim % num_head == 0
+#         assert hidden_dim % num_head == 0
 
-        self.head_dim = self.hidden_dim // num_head
+#         self.head_dim = self.hidden_dim // num_head
 
-        self.compressed_dim = compressed_dim
-        self.rope_dim = rope_dim
+#         self.compressed_dim = compressed_dim
+#         self.rope_dim = rope_dim
 
-        # Step 1: Compress the input representation for K and V
-        # Instead of directly caching full K and V vectors,
-        # we project the input into a smaller latent representation.
-        # Shape: [compressed_dim, hidden_dim]
-        self.down_proj_weight = nn.Parameter(torch.empty(compressed_dim, hidden_dim))
+#         # Step 1: Compress the input representation for K and V
+#         # Instead of directly caching full K and V vectors,
+#         # we project the input into a smaller latent representation.
+#         # Shape: [compressed_dim, hidden_dim]
+#         self.down_proj_weight = nn.Parameter(torch.empty(compressed_dim, hidden_dim))
 
-        # Step 2: Compress the input representation for Q
-        # Query uses its own down-projection to create a
-        # compressed query representation.
-        # Shape: [compressed_dim, hidden_dim]
-        self.down_proj_query_weight = nn.Parameter(torch.empty(compressed_dim, hidden_dim))
+#         # Step 2: Compress the input representation for Q
+#         # Query uses its own down-projection to create a
+#         # compressed query representation.
+#         # Shape: [compressed_dim, hidden_dim]
+#         self.down_proj_query_weight = nn.Parameter(torch.empty(compressed_dim, hidden_dim))
 
-        # Step 3: Up-project the compressed K and V
-        # These projections reconstruct the per-head content
-        # components of keys and values from the compressed KV.
-        # Output dimension: num_head * head_dim = hidden_dim
-        self.up_proj_weight_keys = nn.Parameter(torch.empty(self.head_dim * num_head, compressed_dim))
-        self.up_proj_weight_values = nn.Parameter(torch.empty(self.head_dim * num_head, compressed_dim))
+#         # Step 3: Up-project the compressed K and V
+#         # These projections reconstruct the per-head content
+#         # components of keys and values from the compressed KV.
+#         # Output dimension: num_head * head_dim = hidden_dim
+#         self.up_proj_weight_keys = nn.Parameter(torch.empty(self.head_dim * num_head, compressed_dim))
+#         self.up_proj_weight_values = nn.Parameter(torch.empty(self.head_dim * num_head, compressed_dim))
 
-        # Reconstruct the query content vectors from the
-        # compressed query representation.
-        # Output dimension: num_head * head_dim
-        self.up_proj_query_weight = nn.Parameter(torch.empty(self.head_dim * num_head,compressed_dim))
-
-
-        # Step 4: Rotary positional embedding projections
-        # Project the input into the rotary component of the key.
-        # This component carries positional information.
-        # Shape: [rope_dim, hidden_dim]
-        self.rope_key_weight = nn.Parameter(torch.empty(self.rope_dim, hidden_dim))
-
-        # Project the compressed query into its rotary component.
-        # Shape: [num_head * rope_dim, hidden_dim]
-        self.rope_query_weight = nn.Parameter(torch.empty(self.rope_dim * num_head, hidden_dim))
-
-        # Step 5: Output projection
-        # Projects the concatenated multi-head attention output
-        # back into the model's hidden dimension.
-        self.output_weight = nn.Parameter(torch.empty(self.hidden_dim, self.hidden_dim))
-
-        # Initialize all learnable projection weights.
-        for p in self.parameters():
-            nn.init.xavier_uniform_(p)
-
-    def forward(self, x, position_ids=None, cache=None):
-
-        batch, seq_len, _ = x.shape
-
-        past_len = 0 if cache is None else cache["compressed_kv_cache"].shape[1]
-
-        if position_ids is None:
-            position_ids = torch.arange(past_len, past_len + seq_len, device=x.device).unsqueeze(0).expand(batch, seq_len)
-
-        # Step 1: Compress K and V into a shared latent
-        # [B, S, hidden_dim] -> [B, S, compressed_dim]
-        compressed_kv = x @ self.down_proj_weight.T
-
-        # Step 2: Create the rotary component of the key
-        # Project the input into the key's rotary dimensions.
-        # [B, S, hidden_dim] -> [B, S, rope_dim]
-        k_rope_input = x @ self.rope_key_weight.T
-
-        # Add a head dimension so the rotary key can be
-        # shared across attention heads.
-        # [B, S, rope_dim] -> [B, 1, S, rope_dim]
-        k_rope_input = k_rope_input.unsqueeze(1)
+#         # Reconstruct the query content vectors from the
+#         # compressed query representation.
+#         # Output dimension: num_head * head_dim
+#         self.up_proj_query_weight = nn.Parameter(torch.empty(self.head_dim * num_head,compressed_dim))
 
 
-        # Apply RoPE to the key's rotary component.
-        # Result: [B, 1, S, rope_dim]
-        k_rope = Rope(position_ids, k_rope_input)
+#         # Step 4: Rotary positional embedding projections
+#         # Project the input into the rotary component of the key.
+#         # This component carries positional information.
+#         # Shape: [rope_dim, hidden_dim]
+#         self.rope_key_weight = nn.Parameter(torch.empty(self.rope_dim, hidden_dim))
 
-        if cache is None:
-            # First forward pass: initialize the cache.
-            compressed_kv_cache = compressed_kv
-            k_rope_cache = k_rope
-        else:
-            # Append the new rotary key along the sequence axis.
-            # The head dimension remains 1 because this key
-            # representation is shared across heads.
-            compressed_kv_cache = torch.cat(
-                [cache["compressed_kv_cache"], compressed_kv], dim=1
-            )
-            k_rope_cache = torch.cat(
-                [cache["k_rope_cache"], k_rope], dim=2
-            )
+#         # Project the compressed query into its rotary component.
+#         # Shape: [num_head * rope_dim, hidden_dim]
+#         self.rope_query_weight = nn.Parameter(torch.empty(self.rope_dim * num_head, hidden_dim))
 
-        # Total number of tokens represented in the cache.
-        total_len = compressed_kv_cache.shape[1]
+#         # Step 5: Output projection
+#         # Projects the concatenated multi-head attention output
+#         # back into the model's hidden dimension.
+#         self.output_weight = nn.Parameter(torch.empty(self.hidden_dim, self.hidden_dim))
 
-        # Step 5: Compress and reconstruct the query
-        # Compress the input for the query pathway.
-        # [B, S, hidden_dim] -> [B, S, compressed_dim]
-        query_compressed = x @ self.down_proj_query_weight.T
+#         # Initialize all learnable projection weights.
+#         for p in self.parameters():
+#             nn.init.xavier_uniform_(p)
 
-        # Reconstruct the content query vectors for all heads.
-        # [B, S, compressed_dim] -> [B, S, hidden_dim]
-        query_c = query_compressed @ self.up_proj_query_weight.T
+#     def forward(self, x, position_ids=None, cache=None):
 
-        # Split the hidden dimension into attention heads.
-        # [B, S, hidden_dim] -> [B, H, S, head_dim]
-        q_head = query_c.view(batch, seq_len, self.num_head, self.head_dim).transpose(1,2)
+#         batch, seq_len, _ = x.shape
 
-        # Step 6: Create the rotary component of the query
-        # Project the compressed query into rotary dimensions.
-        q_rope_input = query_compressed @ self.rope_query_weight.T
-        q_rope_input = q_rope_input.unsqueeze(1)
+#         past_len = 0 if cache is None else cache["compressed_kv_cache"].shape[1]
 
-        # Apply RoPE to the query's rotary component.
-        q_rope = Rope(position_ids,  q_rope_input)
+#         if position_ids is None:
+#             position_ids = torch.arange(past_len, past_len + seq_len, device=x.device).unsqueeze(0).expand(batch, seq_len)
 
-        # Reshape the rotary query into per-head components.
-        q_rope_head = q_rope.view(batch, seq_len, self.num_head, self.rope_dim).transpose(1,2)
+#         # Step 1: Compress K and V into a shared latent
+#         # [B, S, hidden_dim] -> [B, S, compressed_dim]
+#         compressed_kv = x @ self.down_proj_weight.T
 
-        # Step 7: Reconstruct K and V from the cached latent
-        # Reconstruct content keys for all cached tokens.
-        # [B, total_len, compressed_dim] -> [B, H, total_len, head_dim]
-        k_content_new = (compressed_kv_cache @ self.up_proj_weight_keys.T).view(batch, total_len, self.num_head, self.head_dim).transpose(1,2)
+#         # Step 2: Create the rotary component of the key
+#         # Project the input into the key's rotary dimensions.
+#         # [B, S, hidden_dim] -> [B, S, rope_dim]
+#         k_rope_input = x @ self.rope_key_weight.T
 
-        # Reconstruct content values for all cached tokens.
-        # [B, total_len, compressed_dim] -> [B, H, total_len, head_dim]
-        v_content_new = (compressed_kv_cache @ self.up_proj_weight_values.T).view(batch, total_len, self.num_head, self.head_dim).transpose(1,2)
-
-        # Step 8: Combine content and rotary components
-        # Expand the shared rotary key across attention heads.
-        # expand() does not copy the underlying data.
-        k_rope_cache_view = k_rope_cache.expand(-1, self.num_head, -1, -1)
-
-        # Concatenate content and rotary components.
-        # K: [B, H, total_len, head_dim + rope_dim]
-        k_combine = torch.cat([k_content_new, k_rope_cache_view], dim=-1)
-        # Q: [B, H, S, head_dim + rope_dim]
-        q_combine = torch.cat([q_head, q_rope_head], dim=-1)
-
-        # Step 9: Calculate attention scores
-        scores = q_combine @ k_combine.transpose(-2,-1)
+#         # Add a head dimension so the rotary key can be
+#         # shared across attention heads.
+#         # [B, S, rope_dim] -> [B, 1, S, rope_dim]
+#         k_rope_input = k_rope_input.unsqueeze(1)
 
 
-        scores = scores / math.sqrt(self.head_dim + self.rope_dim)
+#         # Apply RoPE to the key's rotary component.
+#         # Result: [B, 1, S, rope_dim]
+#         k_rope = Rope(position_ids, k_rope_input)
 
-        # Key positions cover all tokens in the cache.
-        k_position_ids = torch.arange(total_len, device=x.device)
+#         if cache is None:
+#             # First forward pass: initialize the cache.
+#             compressed_kv_cache = compressed_kv
+#             k_rope_cache = k_rope
+#         else:
+#             # Append the new rotary key along the sequence axis.
+#             # The head dimension remains 1 because this key
+#             # representation is shared across heads.
+#             compressed_kv_cache = torch.cat(
+#                 [cache["compressed_kv_cache"], compressed_kv], dim=1
+#             )
+#             k_rope_cache = torch.cat(
+#                 [cache["k_rope_cache"], k_rope], dim=2
+#             )
 
-        # Step 10: casual mask only when casual mask = True
-        causal_mask = (
-            k_position_ids[None, :] <= position_ids[:, None]
-        )
+#         # Total number of tokens represented in the cache.
+#         total_len = compressed_kv_cache.shape[1]
 
-        # Mask future-token scores with negative infinity,
-        # so they receive zero probability after softmax.
-        scores = scores.masked_fill(
-            ~causal_mask[None, None, :, :],
-            float("-inf"),
-        )
+#         # Step 5: Compress and reconstruct the query
+#         # Compress the input for the query pathway.
+#         # [B, S, hidden_dim] -> [B, S, compressed_dim]
+#         query_compressed = x @ self.down_proj_query_weight.T
 
-        attention_score = torch.softmax(scores, dim=-1)
-        weights = attention_score @ v_content_new
+#         # Reconstruct the content query vectors for all heads.
+#         # [B, S, compressed_dim] -> [B, S, hidden_dim]
+#         query_c = query_compressed @ self.up_proj_query_weight.T
 
-        # Move sequence dimension before heads.
-        # [B, H, S, head_dim] -> [B, S, H, head_dim]
-        weights = weights.transpose(1, 2).contiguous()
+#         # Split the hidden dimension into attention heads.
+#         # [B, S, hidden_dim] -> [B, H, S, head_dim]
+#         q_head = query_c.view(batch, seq_len, self.num_head, self.head_dim).transpose(1,2)
 
-        # Merge all heads into the hidden dimension.
-        # [B, S, H, head_dim] -> [B, S, hidden_dim]
-        weights = weights.view(batch, seq_len, self.hidden_dim)
+#         # Step 6: Create the rotary component of the query
+#         # Project the compressed query into rotary dimensions.
+#         q_rope_input = query_compressed @ self.rope_query_weight.T
+#         q_rope_input = q_rope_input.unsqueeze(1)
 
-        # Final output projection.
-        output = weights @ self.output_weight
+#         # Apply RoPE to the query's rotary component.
+#         q_rope = Rope(position_ids,  q_rope_input)
 
-        new_cache = {
-            "compressed_kv_cache" : compressed_kv_cache,
-            "k_rope_cache" : k_rope_cache
-        }
+#         # Reshape the rotary query into per-head components.
+#         q_rope_head = q_rope.view(batch, seq_len, self.num_head, self.rope_dim).transpose(1,2)
 
-        return output, new_cache
+#         # Step 7: Reconstruct K and V from the cached latent
+#         # Reconstruct content keys for all cached tokens.
+#         # [B, total_len, compressed_dim] -> [B, H, total_len, head_dim]
+#         k_content_new = (compressed_kv_cache @ self.up_proj_weight_keys.T).view(batch, total_len, self.num_head, self.head_dim).transpose(1,2)
+
+#         # Reconstruct content values for all cached tokens.
+#         # [B, total_len, compressed_dim] -> [B, H, total_len, head_dim]
+#         v_content_new = (compressed_kv_cache @ self.up_proj_weight_values.T).view(batch, total_len, self.num_head, self.head_dim).transpose(1,2)
+
+#         # Step 8: Combine content and rotary components
+#         # Expand the shared rotary key across attention heads.
+#         # expand() does not copy the underlying data.
+#         k_rope_cache_view = k_rope_cache.expand(-1, self.num_head, -1, -1)
+
+#         # Concatenate content and rotary components.
+#         # K: [B, H, total_len, head_dim + rope_dim]
+#         k_combine = torch.cat([k_content_new, k_rope_cache_view], dim=-1)
+#         # Q: [B, H, S, head_dim + rope_dim]
+#         q_combine = torch.cat([q_head, q_rope_head], dim=-1)
+
+#         # Step 9: Calculate attention scores
+#         scores = q_combine @ k_combine.transpose(-2,-1)
+
+
+#         scores = scores / math.sqrt(self.head_dim + self.rope_dim)
+
+#         # Key positions cover all tokens in the cache.
+#         k_position_ids = torch.arange(total_len, device=x.device)
+
+#         # Step 10: casual mask only when casual mask = True
+#         causal_mask = (
+#             k_position_ids[None, :] <= position_ids[:, None]
+#         )
+
+#         # Mask future-token scores with negative infinity,
+#         # so they receive zero probability after softmax.
+#         scores = scores.masked_fill(
+#             ~causal_mask[None, None, :, :],
+#             float("-inf"),
+#         )
+
+#         attention_score = torch.softmax(scores, dim=-1)
+#         weights = attention_score @ v_content_new
+
+#         # Move sequence dimension before heads.
+#         # [B, H, S, head_dim] -> [B, S, H, head_dim]
+#         weights = weights.transpose(1, 2).contiguous()
+
+#         # Merge all heads into the hidden dimension.
+#         # [B, S, H, head_dim] -> [B, S, hidden_dim]
+#         weights = weights.view(batch, seq_len, self.hidden_dim)
+
+#         # Final output projection.
+#         output = weights @ self.output_weight
+
+#         new_cache = {
+#             "compressed_kv_cache" : compressed_kv_cache,
+#             "k_rope_cache" : k_rope_cache
+#         }
+
+#         return output, new_cache
 
 
 class MLAattention2(nn.Module):
-    def __init__(self, compressed_dim, rope_dim, hidden_dim, q_compressed_dim, num_head, max_seq_len):
+    def __init__(self, model_config):
         super().__init__()
 
-        self.num_head = num_head
-        self.rope_dim = rope_dim
+        self.num_head = model_config.num_head
+        self.rope_dim = model_config.rope_dim
+        self.hidden_dim = model_config.hidden_dim
 
-        assert hidden_dim % num_head == 0, "hidden_dim should be divisible by num_head"
-        self.head_dim = hidden_dim // num_head
+        assert self.hidden_dim % self.num_head == 0, "hidden_dim should be divisible by num_head"
+        self.head_dim = self.hidden_dim // self.num_head
 
-        self.compressed_weight = nn.Parameter(torch.empty(compressed_dim, hidden_dim))
-        self.down_proj_key = nn.Parameter(torch.empty(self.head_dim * num_head, compressed_dim))
-        self.down_proj_value = nn.Parameter(torch.empty(self.head_dim * num_head, compressed_dim))
-        self.rope_proj = nn.Parameter(torch.empty(rope_dim, hidden_dim))
-        self.query_compressed_weight = nn.Parameter(torch.empty(q_compressed_dim, hidden_dim))
-        self.query_down_proj  = nn.Parameter(torch.empty(self.head_dim*num_head, q_compressed_dim))
-        self.query_rope_proj = nn.Parameter(torch.empty(rope_dim*num_head, q_compressed_dim))
-        self.output_proj = nn.Parameter(torch.empty(hidden_dim, self.head_dim*num_head))
-        mask = torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal = 1)
+        self.compressed_weight = nn.Parameter(torch.empty(model_config.compressed_dim, self.hidden_dim))
+
+        self.down_proj_key = nn.Parameter(torch.empty(self.head_dim * self.num_head, model_config.compressed_dim))
+
+        self.down_proj_value = nn.Parameter(torch.empty(self.head_dim * self.num_head, model_config.compressed_dim))
+
+        self.rope_proj = nn.Parameter(torch.empty(model_config.rope_dim, self.hidden_dim))
+
+        self.query_compressed_weight = nn.Parameter(torch.empty(model_config.q_compressed_dim, self.hidden_dim))
+
+        self.query_down_proj  = nn.Parameter(torch.empty(self.head_dim*self.num_head, model_config.q_compressed_dim))
+
+        self.query_rope_proj = nn.Parameter(torch.empty(model_config.rope_dim*self.num_head, model_config.q_compressed_dim))
+
+        self.output_proj = nn.Parameter(torch.empty(self.hidden_dim, self.head_dim*self.num_head))
+
+        mask = torch.triu(torch.ones(model_config.max_len, model_config.max_len), diagonal = 1)
         self.register_buffer("mask", mask, persistent=False)
+
         for p in self.parameters():
             nn.init.xavier_uniform_(p)
 
-        self.Rope = Rope(max_seq_len, rope_dim)
+        self.Rope = Rope(model_config.max_len, model_config.rope_dim)
 
 
     def forward(self, x):
@@ -248,9 +258,11 @@ class MLAattention2(nn.Module):
             compressed_query = x @ (self.query_compressed_weight).transpose(-2,-1)
 
             q_total = compressed_query @ (self.query_down_proj).transpose(-2,-1)
+
             q_head = q_total.view(batch, seq_len, self.num_head, self.head_dim)
 
             query_rope_input = compressed_query @ (self.query_rope_proj).transpose(-2,-1)
+
             query_rope_input = query_rope_input.view(
                  batch, seq_len, self.num_head, self.rope_dim
             )
@@ -271,7 +283,7 @@ class MLAattention2(nn.Module):
 
 
             score = Q @ K.transpose(-2,-1)
-            scaled_score = score / (self.hidden_dim + self.rope_dim)**0.5
+            scaled_score = score / (self.head_dim + self.rope_dim)**0.5
 
             mask_score = scaled_score.masked_fill(self.mask[None, None, :seq_len, :seq_len],float("-inf") )
 
